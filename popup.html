@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg:#fff; --fg:#1f2328; --mut:#656d76; --line:#d0d7de; --acc:#0969da; --ok:#1a7f37; --bad:#cf222e; --soft:#f6f8fa; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#1c1d21; --fg:#e6edf3; --mut:#9198a1; --line:#3d444d; --acc:#4493f8; --ok:#3fb950; --bad:#f85149; --soft:#26282d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; width:300px; background:var(--bg); color:var(--fg); font:13px/1.4 system-ui, -apple-system, sans-serif; }
+  main { padding:14px; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  button { width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:var(--soft); color:var(--fg); font:inherit; font-weight:600; cursor:pointer; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:6px; margin-top:8px; }
+  .row button { width:auto; flex:none; }
+  input { flex:1; min-width:0; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--fg); font:inherit; letter-spacing:.08em; }
+  .or { text-align:center; color:var(--mut); margin:12px 0 4px; font-size:12px; }
+  .code { font:700 26px/1.1 ui-monospace, Menlo, monospace; letter-spacing:.14em; text-align:center; padding:10px; background:var(--soft); border-radius:10px; margin:6px 0; user-select:all; }
+  .status { display:flex; align-items:center; gap:6px; margin:8px 0; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#9a6700; flex:none; }
+  .dot.ok { background:var(--ok); } .dot.bad { background:var(--bad); }
+  .mut { color:var(--mut); font-size:12px; }
+  .err { color:var(--bad); font-size:12px; margin-top:8px; }
+  .box { border:1px solid var(--line); border-radius:8px; padding:8px; margin:8px 0; word-break:break-word; }
+  .stack > * + * { margin-top:6px; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Watch Together</h1>
+
+  <section id="idle" hidden>
+    <button id="host" class="primary">Start a room on this tab</button>
+    <div class="or">or join a friend's room</div>
+    <div class="row" style="margin-top:0">
+      <input id="code" placeholder="room code" maxlength="40" autocomplete="off" spellcheck="false">
+      <button id="join">Join</button>
+    </div>
+    <p class="mut">Open the video page first. Each person watches on their own computer; play, pause, seek and speed stay in sync.</p>
+  </section>
+
+  <section id="room" hidden class="stack">
+    <div class="mut" id="roleLabel"></div>
+    <div class="code" id="roomCode"></div>
+    <button id="copy">Copy invite</button>
+    <div class="status"><span class="dot" id="dot"></span><span id="statusText"></span></div>
+    <div id="hostPage" class="box" hidden>
+      <div class="mut">Host is watching</div>
+      <div id="hostTitle"></div>
+      <div class="row"><button id="openHost">Open the same page</button></div>
+    </div>
+    <div id="otherTab" class="box" hidden>
+      <div class="mut">The room is linked to another tab.</div>
+      <div class="row"><button id="useTab">Use this tab instead</button></div>
+    </div>
+    <button id="leave">Leave room</button>
+  </section>
+
+  <div class="err" id="err" hidden></div>
+</main>
+<script src="popup.js"></script>
+</body>
+</html>
