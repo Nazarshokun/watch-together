@@ -1,5 +1,5 @@
 // Watch Together: service worker. Holds the room state, routes messages
-// between the popup, the page (content.js) and the peer connection (offscreen.js).
+// between the popup, the page (content.js) and the room link (offscreen.js).
 
 const PREFIX = 'wtogether-';
 const DEFAULT = {
@@ -36,7 +36,7 @@ async function ensureOffscreen() {
   await chrome.offscreen.createDocument({
     url: 'offscreen.html',
     reasons: ['WEB_RTC'],
-    justification: 'Peer-to-peer connection that keeps video playback in sync between friends',
+    justification: 'Keeps a live connection to the room so video playback stays in sync between friends',
   });
 }
 
@@ -64,6 +64,7 @@ async function leave() {
   if (S.tabId != null) await toTab({ kind: 'setActive', active: false });
   if (await chrome.offscreen.hasDocument()) {
     await toOffscreen({ cmd: 'leave' });
+    await new Promise(r => setTimeout(r, 500));  // let the goodbye reach the broker
     await chrome.offscreen.closeDocument().catch(() => {});
   }
   await save({ ...DEFAULT });

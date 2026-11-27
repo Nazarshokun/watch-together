@@ -1,81 +1,136 @@
-// Watch Together: the peer-to-peer link (PeerJS / WebRTC). Star topology:
-// the host's peer id is the room code; guests connect to it and the host
-// relays every message to the other guests.
+// Watch Together: the room link. Messages travel through a public MQTT broker
+// (see mqtt.js; several at once), so it works on any network, behind any router.
+//
+// Topics, under wtogether/v2/<room code>:
+//   /all      host -> everyone   (host's own messages and relayed guest messages)
+//   /host     guest -> host
+//   /to/<id>  host -> one guest  (the welcome)
+// Every message is JSON: { t: 'hello'|'ping'|'data'|'bye', from, d? }.
 
-let peer = null;
+const HEARTBEAT = 5000;     // everyone pings this often
+const GONE_AFTER = 16000;   // silent this long = left
+const WELCOME_WAIT = 15000; // guest gives up on a host that never answers
+
+let link = null;   // Relay
 let role = null;
-let hostConn = null;
-const conns = new Map();
+let base = null;
+let me = null;
+let timers = [];
+const guests = new Map();  // host: guest id -> last seen (ms)
+let hostSeen = 0;          // guest: last message from the host
+let welcomed = false;      // guest: got a welcome since the last (re)connect
 
 function toBg(msg) {
   chrome.runtime.sendMessage({ target: 'bg', ...msg }).catch(() => {});
 }
 
+function pub(topic, msg) {
+  return link && link.publish(base + topic, JSON.stringify({ ...msg, from: me }));
+}
+
+function every(ms, fn) { timers.push(setInterval(fn, ms)); }
+function after(ms, fn) { timers.push(setTimeout(fn, ms)); }
+
 function reset() {
-  for (const c of conns.values()) { try { c.close(); } catch {} }
-  conns.clear();
-  if (hostConn) { try { hostConn.close(); } catch {} hostConn = null; }
-  if (peer) { try { peer.destroy(); } catch {} peer = null; }
-  role = null;
-}
-
-function describe(e) {
-  switch (e.type) {
-    case 'peer-unavailable': return 'Room not found. Check the code, or ask the host to keep their popup room open.';
-    case 'unavailable-id': return 'That room code is already in use. Leave and start a new room.';
-    case 'network': case 'server-error': case 'socket-error': case 'socket-closed':
-      return 'Cannot reach the connection server (0.peerjs.com). Check your internet.';
-    case 'webrtc': return 'Direct connection failed (network blocks WebRTC).';
-    default: return e.message || String(e);
+  if (link) {
+    if (role === 'host') pub('/all', { t: 'bye' });
+    link.close();  // the goodbye is sent before the socket closes
   }
+  link = null;
+  timers.forEach(t => { clearInterval(t); clearTimeout(t); });
+  timers = [];
+  guests.clear();
+  role = null;
+  welcomed = false;
+  hostSeen = 0;
 }
 
-function common(p) {
-  p.on('error', e => toBg({ ev: 'status', status: 'error', error: describe(e) }));
-  p.on('disconnected', () => {
-    // Lost the signalling server only; existing peer links keep working.
-    if (!p.destroyed) setTimeout(() => { try { p.reconnect(); } catch {} }, 2000);
-  });
+function parse(text) {
+  try { const m = JSON.parse(text); return m && typeof m === 'object' && m.from ? m : null; }
+  catch { return null; }
 }
 
 function host(id) {
   reset();
   role = 'host';
-  const p = peer = new Peer(id, { debug: 1 });
-  p.on('open', () => toBg({ ev: 'status', status: 'hosting' }));
-  p.on('connection', c => {
-    c.on('open', () => {
-      conns.set(c.connectionId, c);
-      toBg({ ev: 'peers', n: conns.size });
-      toBg({ ev: 'peerJoined', connId: c.connectionId });
-    });
-    c.on('data', d => {
-      for (const [cid, o] of conns) if (cid !== c.connectionId && o.open) o.send(d);
-      toBg({ ev: 'remote', data: d });
-    });
-    const gone = () => { if (conns.delete(c.connectionId)) toBg({ ev: 'peers', n: conns.size }); };
-    c.on('close', gone);
-    c.on('error', gone);
+  base = 'wtogether/v2/' + id;
+  me = 'host';
+  link = new Relay({
+    onUp: () => toBg({ ev: 'status', status: 'hosting' }),
+    onDown: () => toBg({ ev: 'status', status: 'starting' }),
+    onMessage: (topic, text) => {
+      const m = parse(text);
+      if (!m || topic !== base + '/host') return;
+      const isNew = !guests.has(m.from);
+      guests.set(m.from, Date.now());
+      if (m.t === 'hello') {
+        if (isNew) toBg({ ev: 'peers', n: guests.size });
+        toBg({ ev: 'peerJoined', connId: m.from });   // background answers with a welcome
+      } else if (m.t === 'data') {
+        if (isNew) toBg({ ev: 'peers', n: guests.size });
+        pub('/all', { t: 'data', d: m.d, via: m.from });  // relay to the other guests
+        toBg({ ev: 'remote', data: m.d });
+      } else if (m.t === 'bye') {
+        if (guests.delete(m.from)) toBg({ ev: 'peers', n: guests.size });
+      }
+    },
   });
-  common(p);
+  link.subscribe(base + '/host');
+  every(HEARTBEAT, () => {
+    pub('/all', { t: 'ping' });
+    const now = Date.now();
+    let changed = false;
+    for (const [g, seen] of guests) if (now - seen > GONE_AFTER) { guests.delete(g); changed = true; }
+    if (changed) toBg({ ev: 'peers', n: guests.size });
+  });
 }
 
 function join(id) {
   reset();
   role = 'guest';
-  const p = peer = new Peer({ debug: 1 });
-  p.on('open', () => {
-    const c = hostConn = p.connect(id, { reliable: true });
-    const timer = setTimeout(() => {
-      if (!c.open) toBg({ ev: 'status', status: 'error', error: 'No answer from the host. Check the code.' });
-    }, 20000);
-    c.on('open', () => { clearTimeout(timer); toBg({ ev: 'status', status: 'connected' }); });
-    c.on('data', d => toBg({ ev: 'remote', data: d }));
-    c.on('close', () => {
-      if (hostConn === c) toBg({ ev: 'status', status: 'error', error: 'The host closed the room.' });
-    });
+  base = 'wtogether/v2/' + id;
+  me = 'g' + Math.random().toString(36).slice(2, 10);
+  const hello = () => { if (!welcomed) pub('/host', { t: 'hello' }); };
+
+  link = new Relay({
+    onUp: () => {
+      welcomed = false;
+      hello();
+      const startedAt = Date.now();
+      after(WELCOME_WAIT, () => {
+        if (!welcomed && hostSeen < startedAt) {
+          toBg({ ev: 'status', status: 'error', error: 'No answer from the host. Check the code, and that the host still has the room open.' });
+        }
+      });
+    },
+    onDown: () => toBg({ ev: 'status', status: 'connecting' }),
+    onMessage: (topic, text) => {
+      const m = parse(text);
+      if (!m || m.from !== 'host') return;
+      hostSeen = Date.now();
+      if (topic === base + '/to/' + me && m.t === 'data') {
+        if (!welcomed) { welcomed = true; toBg({ ev: 'status', status: 'connected' }); }
+        toBg({ ev: 'remote', data: m.d });
+      } else if (topic === base + '/all') {
+        if (m.t === 'bye') { toBg({ ev: 'status', status: 'error', error: 'The host closed the room.' }); return; }
+        if (m.t === 'data' && m.via !== me) toBg({ ev: 'remote', data: m.d });
+        if (!welcomed) hello();   // host is there but missed our hello
+      }
+    },
   });
-  common(p);
+  link.subscribe(base + '/all');
+  link.subscribe(base + '/to/' + me);
+  every(HEARTBEAT, () => {
+    pub('/host', { t: welcomed ? 'ping' : 'hello' });
+    if (welcomed && Date.now() - hostSeen > GONE_AFTER) {
+      welcomed = false;
+      toBg({ ev: 'status', status: 'connecting' });
+      hello();
+    }
+    if (!welcomed && hostSeen && Date.now() - hostSeen > 30000) {
+      toBg({ ev: 'status', status: 'error', error: 'Lost contact with the host.' });
+    }
+  });
 }
 
 chrome.runtime.onMessage.addListener((m, _sender, send) => {
@@ -83,12 +138,17 @@ chrome.runtime.onMessage.addListener((m, _sender, send) => {
   switch (m.cmd) {
     case 'host': host(m.id); break;
     case 'join': join(m.id); break;
-    case 'leave': reset(); break;
-    case 'broadcast':
-      if (role === 'host') { for (const c of conns.values()) if (c.open) c.send(m.data); }
-      else if (hostConn && hostConn.open) hostConn.send(m.data);
+    case 'leave':
+      if (role === 'guest') pub('/host', { t: 'bye' });
+      reset();
       break;
-    case 'sendTo': { const c = conns.get(m.connId); if (c && c.open) c.send(m.data); break; }
+    case 'broadcast':
+      if (role === 'host') pub('/all', { t: 'data', d: m.data });
+      else pub('/host', { t: 'data', d: m.data });
+      break;
+    case 'sendTo':
+      if (role === 'host') pub('/to/' + m.connId, { t: 'data', d: m.data });
+      break;
   }
   send({ ok: true });
   return false;

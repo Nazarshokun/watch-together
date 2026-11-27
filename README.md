@@ -2,8 +2,9 @@
 
 Chrome extension that keeps a video in sync between friends on any website
 (rezka, YouTube, anything with an HTML `<video>`): play, pause, seek and speed.
-Each person streams the video on their own computer; only the controls are shared,
-peer-to-peer (WebRTC via PeerJS; the free 0.peerjs.com server only introduces the peers).
+Each person streams the video on their own computer; only the controls are shared.
+They travel through free public MQTT relays (HiveMQ, EMQX and Mosquitto, all three at once),
+so it works on any network, behind any router, on Windows, Mac and Linux.
 Talk over FaceTime, Telegram, Discord, whatever you like.
 
 ## Install (each person)
@@ -12,6 +13,8 @@ Talk over FaceTime, Telegram, Discord, whatever you like.
 3. Pin the extension (puzzle icon → pin).
 
 Friends need this folder too: zip it and send it, they load it the same way.
+On Windows, right-click the zip → **Extract All** first, then choose the extracted folder.
+After an update, everyone reloads the extension (`chrome://extensions` → ↻); old and new versions cannot share a room.
 (Works in Chrome, Edge, Brave, Arc, any Chromium browser. Not in Safari.)
 
 ## Use
@@ -26,3 +29,5 @@ Friends need this folder too: zip it and send it, they load it the same way.
 - Ads that play inside the same player can make one side jump; skip them before starting.
 - Sites whose player hides the video in a closed shadow root or a canvas cannot be synced.
 - DRM sites (Netflix etc.) sync fine, but everyone needs their own account.
+- The relays are public: someone who guessed your 6-character room code could see the page
+  address and play/pause/seek events. No video, audio or personal data is sent.
